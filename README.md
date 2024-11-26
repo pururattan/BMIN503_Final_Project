@@ -1,19 +1,9 @@
 # BMIN503/EPID600 Final Project
 
-This repository contains templates for the final written report and GitHub repository. Follow the instructions below to clone this repository, and then turn in your final project's code via a pull request to this repository.
+This repository contains the written report and the code underlying it. This was created for my final project in *BMIN 503-0 / EPID 600-0: Data Science for Biomedical Informatics* during the Fall 2024 semester at the University of Pennsylvania as part of my Master of Science in Clinical Epidemiology ([MSCE](https://www.cceb.med.upenn.edu/master-science-clinical-epidemiology-msce)) during my Gastroenterology Fellowship.
 
-1. To start, **fork** this BMIN503_Final_Project repository.
-1. **Clone** the forked repository to your computer.
-1. Modify the files provided, add your own, and **commit** changes to complete your final project.
-1. **Push**/sync the changes up to your GitHub account.
-1. Create a **pull request** on this, the original BMIN503_Final_Project, repository to turn in your final project.
+## Project Summary
 
-
-Follow the instructions [here][forking] if you are unsure what the above steps mean.
-
-DUE DATE FOR FINAL VERSION: 12/13/24 11:59PM. This is a hard deadline. Turn in whatever you have by this date.
-
+Explore effect of HCV NAT+ consent during liver transplant evaluation on waitlist mortality and time to organ transplantation.
 
 <!-- Links -->
-[forking]: https://guides.github.com/activities/forking/
-
