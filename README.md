@@ -6,6 +6,8 @@ This repository contains the written report and the code underlying it. This was
 
 Explore effect of HCV NAT+ consent during liver transplant evaluation on waitlist mortality and time to organ transplantation in UNOS Data.
 
+### Repo Contents
+
 The following files are contained within:
 
 1. final_project_puru_unos_2024.qmd - Quarto document with entirety of code used for project
