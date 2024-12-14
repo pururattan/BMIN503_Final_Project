@@ -1,0 +1,580 @@
+---
+title: "Impact of HCV NAT+ Consent on Liver Transplantation Waitlist Outcomes"
+subtitle: "BMIN503/EPID600 Final Project"
+author: "Puru Rattan, MD"
+format:
+  html:
+    toc: true
+    toc-location: left
+editor: visual
+theme: sandstone
+number-sections: true
+embed-resources: true
+execute: 
+  warning: false
+  message: false
+---
+
+------------------------------------------------------------------------
+
+## Overview {#sec-overview}
+
+This is an exploratory project that was initiated to explore the effects of patients being able to consent to receive a hepatitis C virus (HCV) infected organ among end-stage liver disease (ESLD) patients on the United Network for Organ Sharing (UNOS) liver transplant waitlist. The focused goals of the project were to determine trends in consenting for HCV nucleic acid test positive (NAT+) organs and to determine how this has impacted waitlist outcomes.
+
+The full project can be found at <https://github.com/pururattan/BMIN503_Final_Project>
+
+## Introduction {#sec-introduction}
+
+There is a shortage in the supply of donor livers in the United States for all those on the waiting list for a liver transplant to definitively treat their end-stage liver disease (ESLD). The longer time an individual spends on the waiting list, the higher their probability of dying from liver disease. While true with other organs as well, this mortality is especially stark in ESLD as there are no artificial replacements for the liver, unlike hemodialysis for the kidneys or left ventricular assist devices for the heart. ESLD is the culmination of chronic liver disease (CLD), the burden of which is immense in the United States and is expected to rise in the coming years due to alcohol use and metabolic dysfunction, worsening this supply-demand mismatch.
+
+As such, there have been several concerted efforts to expand the donor pool for liver transplantation. One such effort involves the use of livers from deceased donors with hepatitis C virus (HCV) infection. There is an increased availability of such organs due to deaths from the opioid epidemic, whilst the advent of direct-acting antiviral (DAA) agents has made curing HCV after transplant simple and effective.
+
+Since late 2015, there has been a United Network for Organ Sharing (UNOS) policy to guide individual transplant centers to consent patients on their waiting list to receive an organ from an HCV nucleic acid test positive (NAT+) donor. Additionally in 2020, the CDC and the US Public Health Service (PHS) stipulated that the “increased risk donor” designation be removed from this consent process to reduce cognitive bias and improve decision making. Although this consent process has been adopted nationwide, there is a dearth of data on the trends of consenting and the impact on patients’ waitlist outcomes if they consent to receive an HCV NAT+ liver.
+
+In this project, we sought to use the UNOS liver database to explore the trends in HCV NAT+ consent and its impact on waitlist mortality and time to transplant within 12 months of waitlisting specifically across 3 distinct time eras: 2016-2017, 2018-2020, and 2021-2023.
+
+## Methods {#sec-methods}
+
+Describe the data used and general methodological approach used to address the problem described in the @sec-introduction. Subsequently, incorporate full R code necessary to retrieve and clean data, and perform analysis. Be sure to include a description of code so that others (including your future self) can understand what you are doing and why.
+
+We designed a retrospective cohort study using the UNOS Liver database, which contains records of all patients listed for liver transplant in the US. Our analytic cohort was formed by identifying all adult (age \>= 18) patients with their initial single-organ liver transplant listing occurring between January 1, 2016 (first full year of HCV NAT+ consent) and September 30, 2023 (upper limit of data). Apart from excluding those below 18 years of age and with multiple organ listings, the patients being listed for hepatocellular carcinoma (liver cancer) related transplant were also excluded.
+
+This cohort was further restricted to only those patients who were presented with the HCV NAT+ consent and had a response recorded in the UNOS database.
+
+```{r}
+#| echo: false
+
+data_dir <- "C:/Users/M237136/OneDrive - Mayo Clinic/MSCE/BMIN 5030/"
+```
+
+### R Packages
+
+```{r}
+#| label: load-packages
+#| output: false
+
+library(tidyverse)
+library(hms)
+library(tidymodels)
+tidymodels_prefer()
+```
+
+### Data Cleaning
+
+The UNOS database files are not publicly available but were made available to me through my mentorship and research team. Specifically, the following data files were used:
+
+1.  `LIVER_DATA` - The main data file consisting of 1 line per unique waitlist registration and all associated information as it currently stands or as it was at time of waitlist removal
+2.  `LIVER_WLHISTORY_DATA` - A table capturing all the changes made to each waitlist registration, including creation, modification, and deletion. This table records whether the waitlist registration agreed to the HCV NAT+ consent.
+3.  `UNOS_FLATFILE_FORMATS` - An extracted lookup table from a large UNOS Excel Workbook detailing all codes and their lookups used by UNOS
+
+All these files were current through 09/30/2023. Apart (3), all files are in .dta format as the files were originally requested for analyses with STATA.
+
+```{r}
+#| label: load-data
+#| output: false
+
+liver_data <-
+  haven::read_dta(paste0(data_dir,"/Data/LIVER_DATA.DTA")) |>
+  rename_with(tolower)
+
+wl_hx <-
+haven::read_dta(paste0(data_dir,"/Data/LIVER_WLHISTORY_DATA.DTA")) |> 
+  rename_with(tolower)
+
+flatfile <- 
+  read_csv(paste0(data_dir,"/Data/unos_flatfile_formats.csv"),
+           col_types = cols(`SASAnalysis Format` = readr::col_factor(),
+                            `Data Type` = readr::col_factor())) |> 
+  rename_with(tolower) |> 
+  rename_with(~str_replace_all(.x," ","_"))
+
+```
+
+#### `LIVER_DATA`
+
+```{r}
+#| label: liver_data_summary
+
+#Summary of liver_data table
+
+liver_data |> 
+  summarize(total_rows = max(row_number()),
+            non_null_ids = n_distinct(wl_id_code,na.rm = T),
+            cnt_null_ids = sum(is.na(wl_id_code)),
+            min_initdt = min(init_date,na.rm = T),
+            max_initdt = max(init_date,na.rm = T),
+            cnt_null_initdt = sum(is.na(init_date)))
+
+```
+
+```{r}
+#| label: create_liv_data_clean
+
+liv_data_clean <-
+liver_data |>
+  mutate(
+    sex = factor(gender,
+                 levels = c("F", "M"),
+                 ordered = T),
+    race_eth = factor(
+      case_match(
+        ethcat,
+        1 ~ "White",
+        2 ~ "Black",
+        4 ~ "Hispanic",
+        5 ~ "Asian",
+        c(6, 7, 9, 998) ~ "Other",
+        .default = NA_character_),
+      levels = c("White", "Black", "Hispanic", "Asian", "Other"))) |> 
+  drop_na(wl_id_code) |> #1692 NULLs, missing most other data or reg < 1988
+  select(-"gender") |> 
+  relocate(wl_id_code) #moves field to front
+
+liv_data_clean |> 
+    summarize(non_null_ids = n_distinct(wl_id_code,na.rm = T),
+              cnt_null_ids = sum(is.na(wl_id_code)),
+              min_initdt = min(init_date,na.rm = T),
+              max_initdt = max(init_date,na.rm = T),
+              cnt_null_initdt = sum(is.na(init_date)))
+
+liv_data_clean |> 
+  select(wl_id_code, sex, race_eth) |> 
+  summary()
+
+rm(liver_data)
+```
+
+```{r}
+#| label: add_dx_categories
+
+#Assign Diagnosis Categories based on validated algorithms
+
+liv_data_clean <-
+liv_data_clean |> 
+  mutate(
+    diabetes = case_match(diab, 1 ~ F, c(2, 3, 4, 5) ~ T,
+                          .default = NA),
+    ascites_cat = factor(
+      case_when(init_ascites == 4 ~ NA_real_,
+                .default = init_ascites),
+      labels = c("Absent","Slight","Moderate")),
+    new_weight = case_when(
+      init_wgt_kg < 20 | init_wgt_kg >= 200 ~ NA_real_,
+      ascites_cat == "Absent" |
+        is.na(ascites_cat) ~ init_wgt_kg, #Weight adjusted for ascites
+      ascites_cat == "Slight" ~ 0.95 * init_wgt_kg,
+      ascites_cat == "Moderate" ~ 0.90 * init_wgt_kg,
+      .default = NA_real_),
+    new_height = case_when(hgt_cm_tcr < 120 ~ NA_real_,
+                           .default = hgt_cm_tcr/100),
+    new_bmi = new_weight / (new_height ^ 2),
+    new_obesity = case_when(race_eth == "Asian" &
+                              new_bmi >= 27.5 ~ T,
+                            new_bmi >= 30 ~ T,
+                            .default = F),
+    new_dx = factor(
+      case_when(
+        dgn_tcr %in% c(4208, 4213, 4400, 4401) &
+          dgn2_tcr %in% c(4215, 4217, 4218, 4219) &
+          (diabetes == T | new_obesity == T) ~ "MetALD",
+        dgn_tcr == 4214 &
+          dgn2_tcr %in% c(4215, 4217, 4218, 4219) ~ "MetALD",
+        dgn_tcr %in% c(4215, 4217, 4218, 4219) &
+          (dgn2_tcr == 4214 | diabetes == T | new_obesity == T) ~ "MetALD",
+        dgn_tcr %in% c(4208, 4213) &
+          (dgn2_tcr == 4214 | diabetes == T | new_obesity == T) ~ "MASLD",
+        dgn_tcr %in% c(4400, 4401) &
+          dgn2_tcr == 4214 ~ "MASLD",
+        dgn_tcr %in% c(4400, 4401) &
+          dgn2_tcr %in% c(4208, 4213) &
+          (diabetes == T | new_obesity == T) ~ "MASLD",
+        dgn_tcr == 4214 ~ "MASLD",
+        dgn_tcr %in% c(4215, 4217, 4218, 4219) ~ "ALD",
+        dgn_tcr %in% c(4400, 4401) &
+          dgn2_tcr %in% c(4215, 4217, 4218, 4219) ~ "ALD",
+        dgn_tcr %in% c(4104, 4106, 4204, 4206, 4216, 4593) ~ "HCV",
+        dgn_tcr %in% c(4400, 4401) &
+          dgn2_tcr %in% c(4104, 4106, 4204, 4206, 4216, 4593) ~ "HCV",
+        dgn_tcr %in% c(4212, 4220, 4240, 4241, 4242, 4245) ~ "Autoimmune",
+        dgn_tcr %in% c(4400, 4401) &
+          dgn2_tcr %in% c(4212, 4220, 4240, 4241, 4242, 4245) ~ "Autoimmune",
+        dgn_tcr %in% c(4102, 4107, 4202, 4207, 4592) ~ "HBV",
+        dgn_tcr %in% c(4400, 4401) &
+          dgn2_tcr %in% c(4102, 4107, 4202, 4207, 4592) ~ "HBV",
+        .default = "Other"),
+      levels = c("HCV", "Autoimmune", "MASLD", "ALD", "MetALD", "HBV" , "Other")
+    ))
+
+liv_data_clean |> 
+  select(wl_id_code, diabetes, ascites_cat, new_weight, new_height, new_bmi, new_obesity, new_dx) |> 
+  summary()
+
+
+```
+
+```{r}
+#| label: add_misc_categories
+
+#Assign Other Categories based on validated algorithms
+
+liv_data_clean <-
+  liv_data_clean |> 
+  mutate(
+    region_us = factor( #REGION
+      case_match(
+        region,
+        c(1, 2, 9) ~ "Northeast",
+        c(3, 4, 11) ~ "Southeast",
+        c(7, 8, 10) ~ "Midwest",
+        c(5, 6) ~ "West"
+        ),
+      levels = c("Northeast", "Southeast", "Midwest", "West")
+      ),
+    insurance = factor( #INSURANCE / PAYOR
+      case_match(
+        pri_payment_tcr,
+        c(1,8) ~ "Private",
+        c(3,4,13) ~ "Medicare",
+        c(2) ~ "Medicaid",
+        .default = "Other"
+        )
+      ),
+    ins_public = factor( #PUBLIC INSURANCE
+      case_match(
+        pri_payment_tcr,
+        c(1,8:12) ~ "Not Public",
+        c(2:7,13,14) ~ "Public",
+        .default = "Unknown"
+        )
+      ),
+    education_tcr = factor( #EDUCATION
+      case_match(
+        education,
+        c(1) ~ "None",
+        c(2,3) ~ "Grade/High School",
+        c(4,5) ~ "College",
+        c(6) ~ "Post-Graduate",
+        .default = NA_character_
+        )
+      ),
+    he_cat = factor( #HEPATIC ENCEPHALOPATHY
+      case_when(
+        init_enceph == 4 ~ NA_real_,
+        .default = init_enceph
+        ),
+      labels = c("None","Grade 1-2","Grade 3-4")
+      ),
+    dialysis = factor( #DIALYSIS
+      case_when(init_dialysis_prior_week == "Y" ~ T,
+                init_dialysis_prior_week == "N" ~ F,
+                .default = NA)
+      ),
+    meld_cat = factor( #MELD Score Categories
+      case_when(
+        init_meld_peld_lab_score < 15 ~ "<15",
+        init_meld_peld_lab_score <=25 ~ "15-25",
+        init_meld_peld_lab_score >25 ~ ">25",
+        .default = NA_character_
+        ),
+      levels = c("<15","15-25",">25"),ordered = T
+      ),
+    bmi_cat = factor( #BMI CATEGORY
+      case_when(
+        init_bmi_calc < 18.5 ~ "Underweight",
+        init_bmi_calc < 25 ~ "Normal",
+        init_bmi_calc < 30 ~ "Overweight",
+        init_bmi_calc >= 30 ~ "Obese",
+        .default = NA_character_
+        ),
+      levels = c("Underweight","Normal","Overweight","Obese"),
+      ordered = T
+      ),
+    year_cat = factor( #WAITLIST YEAR ERA
+      case_when(
+        listyr <= 2017 ~ "Era 1",
+        listyr <= 2020 ~ "Era 2",
+        listyr > 2020 ~ "Era 3"
+        )
+      ),
+    wl_out = case_match( #EVENT STATUS FOR wAITLIST MORTALITY
+      rem_cd,
+      c(5,8,9,13) ~ 1,
+      c(6,7,16,24) ~ 0,
+      c(4,12,14,15,18,21,22) ~ 2,
+      .default = 0
+      ),
+    tx_out = case_when( #EVENT STATUS FOR TRANSPLANTATION
+      rem_cd == 12 ~ 2,
+      wl_out == 0 ~ 0,
+      wl_out == 1 ~ 2,
+      wl_out == 2 ~ 1,
+      .default = 0
+      ),
+    exclude = factor( #EXCLUSION CRITERIA
+      case_when( 
+        init_age < 18 ~ "Yes - Age",
+        hcc_diagnosis_tcr == "Y" | exc_hcc == "HCC" ~ "Yes - HCC",
+        (wlhr == "Y" | wlhl == "Y" | wlin == "Y" | wlki == "Y" | wlkp == "Y" | 
+           wllu == "Y" | wlpa == "Y" | wlpi == "Y" | wlvc == "Y") ~ "Yes - MultiOrgan",
+        .default = "No"
+        )
+      )
+    )
+
+liv_data_clean |> 
+  select(wl_id_code, region_us, insurance, ins_public, education_tcr, 
+         he_cat, dialysis, meld_cat, bmi_cat, year_cat, wl_out, tx_out,exclude) |> 
+  summary()
+```
+
+#### `LIVER_WLHISTORY_DATA`
+
+```{r}
+#| label: liver_wlhistory_data_summary
+
+#Summary of liver_wlhistory_data table
+
+wl_hx |> 
+  summarize(total_rows = max(row_number()),
+            non_null_ids = n_distinct(wl_id_code,na.rm = T),
+            cnt_null_ids = sum(is.na(wl_id_code)),
+            min_dt = min(chg_date,na.rm = T),
+            max_dt = max(chg_date,na.rm = T),
+            cnt_null_initdt = sum(is.na(chg_date)))
+
+```
+
+```{r}
+#| label: create_exit_prior
+
+#Identify those records who left the waitlist before HCV NAT+ was introduced in 2015-08-10
+
+exit_prior <- #label those registrations with last mod date is before 2015-08-10
+  wl_hx |>
+  select(starts_with("wl_id"), chg_date, chg_time, chg_ty) |>
+  mutate(chg_time = as_hms(chg_time)) |>
+  group_by(wl_id_code) |>
+  summarize(max_rec = max(chg_date)) |>
+  ungroup() |>
+  mutate(exit_prior = case_when(max_rec < "2015-08-10" ~ T, .default = F)) |>
+  select(wl_id_code, exit_prior)
+
+exit_prior |> summary()
+```
+
+```{r}
+#| label: create wl_hx subtables
+
+#Label records in wl_hx with HCV NAT+ status, stratified by consent on initial listing or subsequent modification or no consent
+
+wl_hx_trunc <-
+wl_hx |> 
+  select(starts_with("wl_id"),
+         starts_with("doncrit_acpt_hcv_nat"),
+         chg_date,chg_time,chg_ty) |> 
+  left_join(exit_prior,by = "wl_id_code") |> 
+  mutate(chg_time = as_hms(chg_time),
+         pr_hcv_nat = case_when(
+           doncrit_acpt_hcv_nat_pos == "" ~ "No Record",
+           .default = doncrit_acpt_hcv_nat_pos))|> 
+  # filter(doncrit_acpt_hcv_nat_pos != "") |> 
+  # arrange(wl_id_code,chg_date,chg_time) |> 
+  filter(exit_prior == F) |> #Filter using exit_prior flag
+  group_by(wl_id_code) |> 
+  arrange(chg_date,chg_time) |> 
+  mutate(hcv_consent_init = case_when(chg_ty == "A" & pr_hcv_nat == "Y" ~ T,
+                                       .default = F),
+         hcv_consent_full = case_when(max(pr_hcv_nat) == "Y" ~ T,
+                                      .default = F)) |> 
+  ungroup()
+
+#Create wl_hx_hcvnat with 1 line per wl_id_code with HCV NAT labels
+
+wl_hx_hcvnat <-
+wl_hx_trunc |> 
+  arrange(wl_id_code,chg_date,chg_time) |> 
+  group_by(wl_id_code) |> 
+  slice_head(n=1) |> 
+  ungroup()
+```
+
+#### Create Final Analysis Table
+
+```{r}
+#| label: create final analysis table
+
+#Inner join liver_data_clean and wl_hx_hcvnat, then apply exclusion criteria
+
+liv_data_hcv_final <-
+liv_data_clean |> 
+  inner_join(
+    wl_hx_hcvnat |> 
+      select(wl_id_code, starts_with("hcv_consent")),by = "wl_id_code") |> 
+  filter(listyr >= 2016 & exclude == "No") |> #Apply exclusion criteria
+  mutate(wl_mon = time_length(difftime(end_date,init_date),"months")) |> 
+  relocate(wl_id_code,sex:wl_mon)
+```
+
+### Statistical Analyses
+
+#### Summary of Data
+
+```{r}
+#| label: create summary table
+
+library(arsenal)
+
+hcv_nat_table1 <-
+tableby(hcv_consent_init ~ sex + race_eth + init_age + bmi_cat + diabetes + new_dx + region_us + ascites_cat + he_cat + meld_cat + insurance + education_tcr,
+        data = liv_data_hcv_final)
+```
+
+```{r}
+#| label: create summary plots
+
+histo_basic <-
+liv_data_hcv_final |> 
+  ggplot(aes(x=listyr, fill = hcv_consent_init)) + 
+  geom_histogram(binwidth = 1, color="black") +
+  theme_minimal()+
+  theme(legend.position = "bottom")
+
+histo_bysex <-
+liv_data_hcv_final |> 
+  ggplot(aes(x=listyr, fill = hcv_consent_init)) + 
+  geom_histogram(binwidth = 1, color="black") +
+  facet_wrap(sex ~ .) +
+  theme_minimal()+
+  theme(legend.position = "bottom")
+
+box_byage <-
+liv_data_hcv_final |> 
+  ggplot(aes(x=hcv_consent_init,y=init_age)) +
+  geom_boxplot(aes(fill = hcv_consent_init)) +
+  theme_minimal() + theme(legend.position = "none")
+
+```
+
+#### Logistic Regression to Determine Association with HCV NAT+ Consent
+
+```{r}
+
+# logistic regression model
+
+hcv_consent_log_fit <-
+  glm(hcv_consent_init ~ sex + race_eth + new_dx + 
+                          meld_cat + ascites_cat + 
+                          he_cat + insurance + region_us, 
+      data = liv_data_hcv_final, 
+      family = "binomial")
+
+hcv_log_res <-
+hcv_consent_log_fit |> 
+  broom::tidy(conf.int = T, exponentiate = T)
+
+```
+
+#### Survival Analysis to Evaluate Impact of HCV NAT+ Consent on Time to Transplant
+
+```{r}
+
+#Survival / Time-To-Event Analyses
+
+library(survival)
+library(ggsurvfit)
+
+liv_data_hcv_final <-
+liv_data_hcv_final |> 
+  mutate(tx_surv = case_when(wl_mon > 12 ~ 0,
+                             tx_out == 2 ~ 0,
+                             .default = tx_out))
+
+hcv_kmcurve <-
+survfit2(Surv(wl_mon, tx_surv) ~ hcv_consent_init, data = liv_data_hcv_final) |> 
+  ggsurvfit() +
+  labs(
+    x = "Months on Waitlist",
+    y = "Overall transplant-free probability"
+  ) +
+  ggtitle("Kaplan Meier Curve for Transplantation by HCV Consent") + 
+  coord_cartesian(xlim = c(0, 12),ylim = c(0,1)) +
+  scale_x_continuous(breaks = seq(0,12,1)) +
+  scale_y_continuous(breaks = seq(0.00,1.00,0.10))
+
+hcv_cox_fit <-
+coxph(Surv(wl_mon, tx_surv) ~ hcv_consent_init + init_age + sex + race_eth + new_dx + meld_cat + ascites_cat + he_cat + region_us, 
+      data = liv_data_hcv_final)
+
+hcv_cox_res <-
+hcv_cox_fit |> 
+  broom::tidy(conf.int = T, exponentiate = T)
+```
+
+## Results {#sec-results}
+
+### Table One
+
+```{r}
+#| results: asis
+
+hcv_nat_table1 |> summary()
+```
+
+### Summary Plots
+
+```{r}
+
+histo_basic
+
+histo_bysex
+
+box_byage
+```
+
+### Logistic Regression - Factors influencing Consent
+
+```{r}
+
+hcv_log_res
+
+hcv_log_res |> 
+  filter(!term == "(Intercept)") |> 
+  ggplot(aes(y = term, x = estimate, 
+                 xmin = conf.low, xmax = conf.high)) +
+  geom_pointrange() +
+  xlab("Odds Ratio") +
+  ylab("Variables") +
+  geom_vline(xintercept = 1) +
+  ggtitle("Odds Ratio for HCV Consent Predictors") +
+  theme_light()
+
+```
+
+### Survival Analysis - Time to Transplant by HCV NAT+ Consent Status
+
+```{r}
+
+hcv_kmcurve
+
+hcv_cox_res
+
+hcv_cox_res |> 
+  filter(!term == "(Intercept)") |> 
+  mutate(categ = case_when(term == "hcv_consent_initTRUE" ~ 1, .default = 0)) |> 
+  ggplot(aes(y = term, x = estimate, 
+                 xmin = conf.low, xmax = conf.high, color = categ)) +
+  geom_pointrange() +
+  xlab("Hazard Ratio") +
+  ylab("Variables") +
+  geom_vline(xintercept = 1) +
+  ggtitle("Hazard Ratio for Transplantation") +
+  guides(color = "none") +
+  theme_light()
+
+```
+
+## Conclusion
+
+This project analyzed the comprehensive UNOS Liver Transplant database to explore the determinants of agreeing to receive an HCV NAT+ livers when on the waitlist for liver transplantation, as well as the impact of consenting on the time to transplantation. These results clearly show that there is a lot of variability in the patients consenting to receive HCV NAT+ organs, especially by etiology of liver disease, severity of liver disease, and by region of the transplant center. Furthermore, there is definitive evidence here that those who consent to an HCV NAT+ organ have a statistically significant higher rate of transplantation in the first 12 months of listing.
+
+These results will form the basis of more in-depth survival analysis exploring the impact on waitlist mortality as well as evaluating these outcomes with competing risks models.
